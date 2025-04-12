@@ -1,8 +1,10 @@
 import React, { useRef, useEffect, useState } from 'react';
+import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import Hls from 'hls.js';
 import axios from 'axios';
+import VideoJsPlayer from './VideoJsPlayer';
 
-const App: React.FC = () => {
+const HlsPlayer: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -135,6 +137,38 @@ const App: React.FC = () => {
         </div>
       )}
     </div>
+  );
+};
+
+const Navigation: React.FC = () => {
+  return (
+    <nav className="bg-blue-600 text-white p-4">
+      <div className="container mx-auto flex justify-between">
+        <span className="font-bold text-xl">Video Player Demo</span>
+        <ul className="flex space-x-4">
+          <li>
+            <Link to="/" className="hover:underline">HLS Player</Link>
+          </li>
+          <li>
+            <Link to="/videojs" className="hover:underline">VideoJS Player</Link>
+          </li>
+        </ul>
+      </div>
+    </nav>
+  );
+};
+
+const App: React.FC = () => {
+  return (
+    <Router>
+      <div className="flex flex-col min-h-screen">
+        <Navigation />
+        <Routes>
+          <Route path="/" element={<HlsPlayer />} />
+          <Route path="/videojs" element={<VideoJsPlayer />} />
+        </Routes>
+      </div>
+    </Router>
   );
 };
 
