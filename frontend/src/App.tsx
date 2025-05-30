@@ -1,171 +1,183 @@
-import React, { useRef, useEffect, useState } from 'react';
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
-import Hls from 'hls.js';
+import React, { useState } from 'react';
+import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
 import axios from 'axios';
-import VideoJsPlayer from './VideoJsPlayer';
+import VideoPlayer from './components/VideoPlayer';
+import FaceTimeline from './components/FaceTimeline';
 
-const HlsPlayer: React.FC = () => {
-  const videoRef = useRef<HTMLVideoElement | null>(null);
+interface FaceBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface FaceDetection {
+  frame: number;
+  timestamp: string;
+  faces: FaceBox[];
+}
+
+interface FaceData {
+  face_detections: FaceDetection[];
+  metadata: {
+    total_frames: number;
+    fps: number;
+    processed_frames?: number;
+    step_size?: number;
+  };
+}
+
+const VideoAnalyzer: React.FC = () => {
   const [videoUrl, setVideoUrl] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const hlsRef = useRef<Hls | null>(null);
+  const [faceData, setFaceData] = useState<FaceData | null>(null);
+  const [currentTime, setCurrentTime] = useState(0);
+  const [processing, setProcessing] = useState(false);
 
   const handleLoadVideo = async () => {
+    setFaceData(null);
+    setProcessing(false);
     setLoading(true);
     setError(null);
     setVideoUrl(null);
 
     try {
-      console.log('Fetching video URL...');
-      const res = await axios.get('http://localhost:5000/api/get_video');
-      if (res.data.error) {
-        throw new Error(res.data.error);
+      const videoRes = await axios.get('http://localhost:5000/api/get_video');
+      if (videoRes.data.error) throw new Error(videoRes.data.error);
+      
+      setVideoUrl(videoRes.data.video_url);
+      setLoading(false);
+      setProcessing(true);
+
+      const processRes = await axios.post('http://localhost:5000/api/process_video');
+      
+      if (processRes.data.cached) {
+        const faceRes = await axios.get('http://localhost:5000/api/face_data');
+        if (faceRes.data?.face_detections) {
+          setFaceData({
+            face_detections: faceRes.data.face_detections,
+            metadata: faceRes.data.metadata || { total_frames: 0, fps: 30 }
+          });
+          setProcessing(false);
+          return;
+        }
       }
-      const url = res.data.video_url;
-      console.log('Got URL:', url);
-      setVideoUrl(url);
+
+      const pollInterval = setInterval(async () => {
+        try {
+          const faceRes = await axios.get('http://localhost:5000/api/face_data');
+          if (faceRes.data?.face_detections) {
+            setFaceData({
+              face_detections: faceRes.data.face_detections,
+              metadata: faceRes.data.metadata || { total_frames: 0, fps: 30 }
+            });
+            setProcessing(false);
+            clearInterval(pollInterval);
+          }
+        } catch (err: any) {
+          if (err.response?.status !== 404) {
+            setError('Failed to load face detection data');
+            setProcessing(false);
+            clearInterval(pollInterval);
+          }
+        }
+      }, 1000);
+
+      setTimeout(() => {
+        clearInterval(pollInterval);
+        if (processing) {
+          setError('Face detection timed out');
+          setProcessing(false);
+        }
+      }, 30000);
+
     } catch (e: any) {
-      console.error('Error:', e);
       setError(e.message || 'Failed to load video');
       setLoading(false);
+      setProcessing(false);
     }
   };
 
-  useEffect(() => {
-    const video = videoRef.current;
-    if (!video || !videoUrl) return;
-
-    // Clean up previous HLS instance
-    if (hlsRef.current) {
-      console.log('Cleaning up old HLS instance');
-      hlsRef.current.destroy();
-      hlsRef.current = null;
-    }
-
-    console.log('Setting up player for:', videoUrl);
-
-    if (Hls.isSupported()) {
-      const hls = new Hls({
-        enableWorker: true,
-        maxBufferLength: 30,
-        liveSyncDurationCount: 3, // Sync for continuous streaming
-      });
-      hlsRef.current = hls;
-
-      hls.loadSource(videoUrl);
-      hls.attachMedia(video);
-      hls.on(Hls.Events.MANIFEST_PARSED, () => {
-        console.log('Manifest loaded');
-        setLoading(false);
-        video.play().catch((err) => console.error('Playback failed:', err));
-      });
-      hls.on(Hls.Events.ERROR, (event, data) => {
-        console.error('HLS error:', data);
-        if (data.fatal) {
-          setError(`Streaming error: ${data.type} - ${data.details}`);
-          setLoading(false);
-          hls.destroy();
-        }
-      });
-    } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = videoUrl;
-      video.addEventListener('loadedmetadata', () => {
-        console.log('Metadata loaded');
-        setLoading(false);
-        video.play().catch((err) => console.error('Playback failed:', err));
-      });
-      video.addEventListener('error', () => {
-        setError('Video playback failed');
-        setLoading(false);
-      });
-    } else {
-      setError('HLS streaming not supported in this browser');
-      setLoading(false);
-    }
-
-    // Cleanup
-    return () => {
-      if (hlsRef.current) {
-        hlsRef.current.destroy();
-        hlsRef.current = null;
-      }
-      if (video) {
-        video.src = '';
-      }
-    };
-  }, [videoUrl]);
+  const handleTimeClick = (time: number) => {
+    const video = document.querySelector('video');
+    if (video) video.currentTime = time;
+  };
 
   return (
-    <div className="flex flex-col items-center justify-center min-h-screen p-6 bg-gray-100">
-      <h1 className="text-3xl font-bold mb-6">📺 HLS Streaming Demo</h1>
-      <button
-        onClick={handleLoadVideo}
-        disabled={loading}
-        className={`px-4 py-2 rounded-md text-white ${
-          loading ? 'bg-gray-500 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700'
-        }`}
-      >
-        {loading ? 'Loading...' : 'Load Video'}
-      </button>
+    <div className="min-h-screen bg-gray-50 p-6">
+      <div className="max-w-7xl mx-auto">
 
-      {error && (
-        <p className="mt-4 text-red-500">
-          {error}
-          {error.includes('not ready') && (
-            <span> <button
-              onClick={handleLoadVideo}
-              className="underline text-blue-500"
-            >
-              Try again
-            </button></span>
-          )}
-        </p>
-      )}
-      {loading && !error && (
-        <p className="mt-4 text-gray-500">Generating video stream, please wait...</p>
-      )}
-
-      {videoUrl && (
-        <div className="mt-6 w-full max-w-4xl">
-          <video
-            ref={videoRef}
-            controls
-            className="w-full rounded shadow-lg"
-            style={{ maxHeight: '70vh' }}
-          />
+        <div className="bg-white rounded-lg shadow-md p-6 mb-6">
+          <button
+            onClick={handleLoadVideo}
+            disabled={loading || processing}
+            className={`w-full md:w-auto px-6 py-3 rounded-lg font-medium text-white transition-colors ${
+              loading || processing 
+                ? 'bg-gray-400 cursor-not-allowed' 
+                : 'bg-blue-600 hover:bg-blue-700'
+            }`}
+          >
+            {loading ? '⏳ Loading...' : processing ? '🔍 Analyzing...' : '🚀 Start Analysis'}
+          </button>
         </div>
-      )}
-    </div>
-  );
-};
 
-const Navigation: React.FC = () => {
-  return (
-    <nav className="bg-blue-600 text-white p-4">
-      <div className="container mx-auto flex justify-between">
-        <span className="font-bold text-xl">Video Player Demo</span>
-        <ul className="flex space-x-4">
-          <li>
-            <Link to="/" className="hover:underline">HLS Player</Link>
-          </li>
-          <li>
-            <Link to="/videojs" className="hover:underline">VideoJS Player</Link>
-          </li>
-        </ul>
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-lg mb-6">
+            {error}
+            {error.includes('not ready') && (
+              <button onClick={handleLoadVideo} className="ml-2 underline">
+                Try again
+              </button>
+            )}
+          </div>
+        )}
+
+        {videoUrl && (
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="lg:col-span-2">
+              <div className="bg-white rounded-lg shadow-md p-6">
+                <h2 className="text-xl font-bold mb-4">📹 Video Stream</h2>
+                <VideoPlayer
+                  videoUrl={videoUrl}
+                  faceData={faceData}
+                  onTimeUpdate={setCurrentTime}
+                />
+              </div>
+            </div>
+            
+            <div>
+              <div className="bg-white rounded-lg shadow-md p-6">
+                <h2 className="text-xl font-bold mb-4">👥 Detections</h2>
+                {processing ? (
+                  <div className="text-center py-8">
+                    <div className="animate-pulse text-gray-400">Processing...</div>
+                  </div>
+                ) : (
+                  <FaceTimeline
+                    faceData={faceData}
+                    currentTime={currentTime}
+                    onTimeClick={handleTimeClick}
+                  />
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
-    </nav>
+    </div>
   );
 };
 
 const App: React.FC = () => {
   return (
     <Router>
-      <div className="flex flex-col min-h-screen">
-        <Navigation />
+      <div className="min-h-screen">
+        <nav className="bg-blue-600 text-white p-4">
+          <h1 className="text-xl font-bold">CerebVision</h1>
+        </nav>
         <Routes>
-          <Route path="/" element={<HlsPlayer />} />
-          <Route path="/videojs" element={<VideoJsPlayer />} />
+          <Route path="/" element={<VideoAnalyzer />} />
         </Routes>
       </div>
     </Router>

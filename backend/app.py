@@ -1,10 +1,12 @@
-from flask import Flask, jsonify, send_from_directory
+from flask import Flask, jsonify, send_from_directory, request
 from flask_cors import CORS
 import os
 import subprocess
 import threading
 import logging
 import time
+import json
+from face_detector import FaceDetector, process_video_background
 
 app = Flask(__name__)
 CORS(app)
@@ -15,10 +17,15 @@ logger = logging.getLogger(__name__)
 
 UPLOADS_DIR = os.path.join(os.path.dirname(__file__), 'uploads')
 STREAMS_DIR = os.path.join(os.path.dirname(__file__), 'streams')
-VIDEO_FILENAME = 'sample.mp4'
+DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
+VIDEO_FILENAME = 'office.mp4'
 
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 os.makedirs(STREAMS_DIR, exist_ok=True)
+os.makedirs(DATA_DIR, exist_ok=True)
+
+# Initialize face detector
+face_detector = FaceDetector()
 
 def convert_to_hls():
     video_path = os.path.join(UPLOADS_DIR, VIDEO_FILENAME)
@@ -120,6 +127,64 @@ def start_hls_conversion():
     except Exception as e:
         logger.error(f"HLS conversion thread failed: {str(e)}")
 
+@app.route('/api/process_video', methods=['POST'])
+def process_video():
+    video_path = os.path.join(UPLOADS_DIR, VIDEO_FILENAME)
+    output_path = os.path.join(DATA_DIR, 'face_data.json')
+    
+    try:
+        # Check if we already have face data for this video
+        if os.path.exists(output_path):
+            # Check if video is newer than face data
+            if not face_detector.should_process_video(video_path, output_path):
+                logger.info("Using existing face data")
+                with open(output_path, 'r') as f:
+                    data = json.load(f)
+                    if data and 'face_detections' in data:
+                        return jsonify({
+                            "status": "success", 
+                            "message": "Using existing face detection data",
+                            "cached": True
+                        })
+                    else:
+                        logger.warning("Existing face data is invalid, reprocessing")
+        
+        # Process video if no data exists or video is newer
+        success = face_detector.process_video(video_path, output_path)
+        if success:
+            return jsonify({
+                "status": "success", 
+                "message": "Video processed successfully",
+                "cached": False
+            })
+        return jsonify({"status": "error", "message": "Failed to process video"}), 500
+    except Exception as e:
+        logger.error(f"Error processing video: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
+@app.route('/api/face_data', methods=['GET'])
+def get_face_data():
+    data_path = os.path.join(DATA_DIR, 'face_data.json')
+    if not os.path.exists(data_path):
+        return jsonify({"error": "Face detection data not found"}), 404
+    
+    try:
+        with open(data_path, 'r') as f:
+            data = json.load(f)
+            if not data or 'face_detections' not in data:
+                return jsonify({"error": "Invalid face detection data format"}), 500
+            return jsonify(data)
+    except json.JSONDecodeError:
+        return jsonify({"error": "Face detection data is incomplete"}), 500
+    except Exception as e:
+        logger.error(f"Error reading face data: {str(e)}")
+        return jsonify({"error": "Failed to read face detection data"}), 500
+
 if __name__ == '__main__':
+    # Start HLS conversion
     threading.Thread(target=start_hls_conversion, daemon=True).start()
+    
+    # Start face detection service
+    threading.Thread(target=process_video_background, daemon=True).start()
+    
     app.run(host='0.0.0.0', port=5000, debug=False)
