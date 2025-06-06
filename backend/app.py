@@ -6,7 +6,7 @@ import threading
 import logging
 import time
 import json
-from face_detector import FaceDetector, process_video_background
+from face_detector import FaceDetector
 
 app = Flask(__name__)
 CORS(app)
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 UPLOADS_DIR = os.path.join(os.path.dirname(__file__), 'uploads')
 STREAMS_DIR = os.path.join(os.path.dirname(__file__), 'streams')
 DATA_DIR = os.path.join(os.path.dirname(__file__), 'data')
-VIDEO_FILENAME = 'office.mp4'
+VIDEO_FILENAME = 'office.mp4'  # Updated to match your video file
 
 os.makedirs(UPLOADS_DIR, exist_ok=True)
 os.makedirs(STREAMS_DIR, exist_ok=True)
@@ -47,16 +47,16 @@ def convert_to_hls():
         logger.error(f"Video file not found: {video_path}")
         return None
 
-    # Simplified FFmpeg command
+    # Simple, proven FFmpeg settings with better quality
     ffmpeg_cmd = [
         'ffmpeg',
         '-i', video_path,
         '-c:v', 'libx264',
         '-c:a', 'aac',
-        '-b:v', '800k',
-        '-b:a', '128k',
+        '-b:v', '1200k',           # Increased from 800k for better quality
+        '-b:a', '192k',            # Increased from 128k for better audio
         '-f', 'hls',
-        '-hls_time', '6',
+        '-hls_time', '6',          # Keep 6-second segments as before
         '-hls_list_size', '0',
         '-hls_segment_filename', os.path.join(stream_output_dir, 'segment_%03d.ts'),
         m3u8_path
@@ -96,6 +96,55 @@ def convert_to_hls():
         logger.error(f"FFmpeg setup failed: {str(e)}")
         return None
 
+def start_hls_conversion():
+    time.sleep(2)  # Wait for Flask to stabilize
+    logger.info("Initiating HLS conversion")
+    try:
+        result = convert_to_hls()
+        if not result:
+            logger.error("Failed to start HLS conversion")
+        else:
+            logger.info(f"HLS conversion successful: {result}")
+    except Exception as e:
+        logger.error(f"HLS conversion thread failed: {str(e)}")
+
+@app.route('/api/video_status', methods=['GET'])
+def video_status():
+    """Check if video file exists and get info"""
+    video_path = os.path.join(UPLOADS_DIR, VIDEO_FILENAME)
+    
+    if not os.path.exists(video_path):
+        return jsonify({
+            "status": "error",
+            "message": f"Video file '{VIDEO_FILENAME}' not found in uploads directory",
+            "video_path": video_path,
+            "uploads_dir_contents": os.listdir(UPLOADS_DIR) if os.path.exists(UPLOADS_DIR) else []
+        }), 404
+    
+    file_size = os.path.getsize(video_path)
+    return jsonify({
+        "status": "success",
+        "video_file": VIDEO_FILENAME,
+        "video_path": video_path,
+        "file_size_mb": round(file_size / (1024 * 1024), 2),
+        "uploads_dir_contents": os.listdir(UPLOADS_DIR)
+    })
+
+@app.route('/api/start_stream', methods=['GET'])
+def start_stream():
+    """Start high quality video streaming"""
+    try:
+        result = convert_to_hls()
+        if result:
+            return jsonify({
+                "status": "success",
+                "video_url": f"http://localhost:5000{result}"
+            })
+        return jsonify({"status": "error", "message": "Failed to start stream"}), 500
+    except Exception as e:
+        logger.error(f"Error starting stream: {str(e)}")
+        return jsonify({"status": "error", "message": str(e)}), 500
+
 @app.route('/api/get_video', methods=['GET'])
 def get_video():
     hls_path = '/streams/sample/playlist.m3u8'
@@ -115,20 +164,9 @@ def serve_stream(filename):
         logger.error(f"Error serving file {filename}: {str(e)}")
         return jsonify({"error": "File not found"}), 404
 
-def start_hls_conversion():
-    time.sleep(2)  # Wait for Flask to stabilize
-    logger.info("Initiating HLS conversion")
-    try:
-        result = convert_to_hls()
-        if not result:
-            logger.error("Failed to start HLS conversion")
-        else:
-            logger.info(f"HLS conversion successful: {result}")
-    except Exception as e:
-        logger.error(f"HLS conversion thread failed: {str(e)}")
-
 @app.route('/api/process_video', methods=['POST'])
 def process_video():
+    """Process video for face detection separately from streaming"""
     video_path = os.path.join(UPLOADS_DIR, VIDEO_FILENAME)
     output_path = os.path.join(DATA_DIR, 'face_data.json')
     
@@ -181,10 +219,7 @@ def get_face_data():
         return jsonify({"error": "Failed to read face detection data"}), 500
 
 if __name__ == '__main__':
-    # Start HLS conversion
+    # Start HLS conversion on startup (like your original code)
     threading.Thread(target=start_hls_conversion, daemon=True).start()
-    
-    # Start face detection service
-    threading.Thread(target=process_video_background, daemon=True).start()
     
     app.run(host='0.0.0.0', port=5000, debug=False)

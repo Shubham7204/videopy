@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { BrowserRouter as Router, Routes, Route } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import axios from 'axios';
 import VideoPlayer from './components/VideoPlayer';
 import FaceTimeline from './components/FaceTimeline';
@@ -22,8 +22,6 @@ interface FaceData {
   metadata: {
     total_frames: number;
     fps: number;
-    processed_frames?: number;
-    step_size?: number;
   };
 }
 
@@ -107,7 +105,6 @@ const VideoAnalyzer: React.FC = () => {
   return (
     <div className="min-h-screen bg-gray-50 p-6">
       <div className="max-w-7xl mx-auto">
-
         <div className="bg-white rounded-lg shadow-md p-6 mb-6">
           <button
             onClick={handleLoadVideo}
@@ -139,6 +136,7 @@ const VideoAnalyzer: React.FC = () => {
               <div className="bg-white rounded-lg shadow-md p-6">
                 <h2 className="text-xl font-bold mb-4">📹 Video Stream</h2>
                 <VideoPlayer
+                  mode="analysis"
                   videoUrl={videoUrl}
                   faceData={faceData}
                   onTimeUpdate={setCurrentTime}
@@ -169,15 +167,28 @@ const VideoAnalyzer: React.FC = () => {
   );
 };
 
+const SimpleStream: React.FC = () => (
+  <div className="min-h-screen bg-gray-50">
+    <VideoPlayer mode="simple" />
+  </div>
+);
+
 const App: React.FC = () => {
   return (
     <Router>
       <div className="min-h-screen">
         <nav className="bg-blue-600 text-white p-4">
-          <h1 className="text-xl font-bold">CerebVision</h1>
+          <div className="max-w-7xl mx-auto flex justify-between items-center">
+            <h1 className="text-xl font-bold">CerebVision</h1>
+            <div className="space-x-4">
+              <Link to="/" className="hover:text-blue-200">Simple Stream</Link>
+              <Link to="/analyzer" className="hover:text-blue-200">Face Analyzer</Link>
+            </div>
+          </div>
         </nav>
         <Routes>
-          <Route path="/" element={<VideoAnalyzer />} />
+          <Route path="/" element={<SimpleStream />} />
+          <Route path="/analyzer" element={<VideoAnalyzer />} />
         </Routes>
       </div>
     </Router>
